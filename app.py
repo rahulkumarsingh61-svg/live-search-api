@@ -7,10 +7,12 @@ from collections import defaultdict
 import gradio as gr
 import httpx
 from bs4 import BeautifulSoup
-
-# 1. Start google-scraper lightweight HTTP backend on port 8000
-subprocess.Popen([sys.executable, "run.py"], cwd="google-scraper")
+# 1. Force google-scraper backend onto port 8000 so Gradio gets Render's $PORT
+backend_env = os.environ.copy()
+backend_env["PORT"] = "8000"
+subprocess.Popen([sys.executable, "run.py"], cwd="google-scraper", env=backend_env)
 time.sleep(2)
+
 
 # 2. API Key + IP Rate Limiter (30 req/min per IP)
 VALID_KEYS = {"sk-free-master-key"}
