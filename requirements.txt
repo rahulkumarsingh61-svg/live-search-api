@@ -4,6 +4,4 @@ uvicorn[standard]
 httpx
 beautifulsoup4
 lxml
-camoufox[geoip]
-browserforge
 gradio
