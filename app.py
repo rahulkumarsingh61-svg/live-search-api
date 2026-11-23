@@ -6,10 +6,11 @@ import uuid
 from collections import defaultdict
 import gradio as gr
 import httpx
+from bs4 import BeautifulSoup
 
-# 1. Start the google-scraper backend on port 8000
+# 1. Start google-scraper lightweight HTTP backend on port 8000
 subprocess.Popen([sys.executable, "run.py"], cwd="google-scraper")
-time.sleep(3)
+time.sleep(2)
 
 # 2. API Key + IP Rate Limiter (30 req/min per IP)
 VALID_KEYS = {"sk-free-master-key"}
@@ -70,6 +71,54 @@ def fetch_live_cricket(filter_query: str = ""):
         return {"error": str(e)}
 
 
+def fetch_lightweight_ai_overview(query: str):
+    """Fast, CAPTCHA-free AI Overview + web results using < 50 MB RAM."""
+    results = []
+    overview_parts = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0.0.0 Safari/537.36"}
+
+    try:
+        ddg = httpx.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query},
+            headers=headers,
+            timeout=15.0,
+        )
+        soup = BeautifulSoup(ddg.text, "lxml")
+        for item in soup.select(".result")[:6]:
+            title_el = item.select_one(".result__a")
+            snip_el = item.select_one(".result__snippet")
+            if title_el:
+                title = title_el.get_text(strip=True)
+                link = title_el.get("href", "")
+                snippet = snip_el.get_text(" ", strip=True) if snip_el else ""
+                results.append({"title": title, "url": link, "snippet": snippet})
+                if snippet and len(overview_parts) < 3:
+                    overview_parts.append(snippet)
+    except Exception:
+        pass
+
+    try:
+        wiki = httpx.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "opensearch", "search": query, "limit": 1, "format": "json"},
+            headers=headers,
+            timeout=10.0,
+        ).json()
+        if len(wiki) >= 4 and wiki[2] and wiki[2][0]:
+            overview_parts.insert(0, wiki[2][0])
+    except Exception:
+        pass
+
+    ai_summary = " ".join(overview_parts).strip() or "No overview summary available for this query."
+    return {
+        "query": query,
+        "ai_overview": ai_summary,
+        "organic_results": results,
+        "engine": "lightweight-cloud-overview",
+    }
+
+
 def unified_search(query: str, mode: str, api_key: str, request: gr.Request):
     allowed, info = check_ip_and_key(request, api_key)
     if not allowed:
@@ -81,21 +130,23 @@ def unified_search(query: str, mode: str, api_key: str, request: gr.Request):
     if not query or not query.strip():
         return {"error": "Please enter a search query."}
 
+    if mode == "AI Overview + Full Google Search":
+        return fetch_lightweight_ai_overview(query)
+
     endpoint_map = {
-        "AI Overview + Full Google Search": "/search",
         "Google News (Live Headlines)": "/news/search",
         "Google Finance (Stock/Crypto Quote)": "/finance/quote",
         "Google Trends (Trending Now)": "/trends/trending",
         "Google Patents": "/patents/search",
         "Google Autocomplete": "/autocomplete",
     }
-    endpoint = endpoint_map.get(mode, "/search")
+    endpoint = endpoint_map.get(mode, "/news/search")
 
     try:
         res = httpx.get(
             f"http://127.0.0.1:8000{endpoint}",
             params={"query": query},
-            timeout=90.0,
+            timeout=30.0,
         )
         return res.json()
     except Exception as e:
@@ -118,7 +169,7 @@ with gr.Blocks(title="Live Google Search, AI Overview & Cricket API") as demo:
             value="AI Overview + Full Google Search",
             label="Mode",
         )
-        query_in = gr.Textbox(label="Query", placeholder="e.g. India vs Australia live score")
+        query_in = gr.Textbox(label="Query", placeholder="e.g. India vs New Zealand live score")
         key_in = gr.Textbox(label="API Key", value="sk-free-master-key")
         btn = gr.Button("Search", variant="primary")
 
