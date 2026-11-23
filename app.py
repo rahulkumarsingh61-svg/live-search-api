@@ -7,12 +7,12 @@ from collections import defaultdict
 import gradio as gr
 import httpx
 from bs4 import BeautifulSoup
+
 # 1. Force google-scraper backend onto port 8000 so Gradio gets Render's $PORT
 backend_env = os.environ.copy()
 backend_env["PORT"] = "8000"
 subprocess.Popen([sys.executable, "run.py"], cwd="google-scraper", env=backend_env)
 time.sleep(2)
-
 
 # 2. API Key + IP Rate Limiter (30 req/min per IP)
 VALID_KEYS = {"sk-free-master-key"}
@@ -74,41 +74,49 @@ def fetch_live_cricket(filter_query: str = ""):
 
 
 def fetch_lightweight_ai_overview(query: str):
-    """Fast, CAPTCHA-free AI Overview + web results using < 50 MB RAM."""
+    """Pulls live results directly from your google-scraper repo + Wikipedia without Camoufox RAM crashes."""
     results = []
     overview_parts = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0.0.0 Safari/537.36"}
 
+    # 1. Fetch live articles directly from your google-scraper repo (/news/search)
     try:
-        ddg = httpx.post(
-            "https://html.duckduckgo.com/html/",
-            data={"q": query},
-            headers=headers,
-            timeout=15.0,
-        )
-        soup = BeautifulSoup(ddg.text, "lxml")
-        for item in soup.select(".result")[:6]:
-            title_el = item.select_one(".result__a")
-            snip_el = item.select_one(".result__snippet")
-            if title_el:
-                title = title_el.get_text(strip=True)
-                link = title_el.get("href", "")
-                snippet = snip_el.get_text(" ", strip=True) if snip_el else ""
-                results.append({"title": title, "url": link, "snippet": snippet})
-                if snippet and len(overview_parts) < 3:
-                    overview_parts.append(snippet)
+        news_res = httpx.get(
+            "http://127.0.0.1:8000/news/search",
+            params={"query": query},
+            timeout=20.0,
+        ).json()
+        items = news_res.get("results") or news_res.get("articles") or news_res.get("news") or []
+        for item in items[:6]:
+            title = item.get("title", "")
+            link = item.get("link") or item.get("url", "")
+            snippet = item.get("snippet") or item.get("description") or title
+            source = item.get("source", "")
+            if title:
+                results.append({"title": title, "url": link, "source": source, "snippet": snippet})
+                if len(overview_parts) < 3:
+                    overview_parts.append(f"{title} ({source})." if source else f"{title}.")
     except Exception:
         pass
 
+    # 2. Enrich with Wikipedia summary
     try:
         wiki = httpx.get(
             "https://en.wikipedia.org/w/api.php",
-            params={"action": "opensearch", "search": query, "limit": 1, "format": "json"},
+            params={"action": "query", "list": "search", "srsearch": query, "srlimit": 2, "format": "json"},
             headers=headers,
             timeout=10.0,
         ).json()
-        if len(wiki) >= 4 and wiki[2] and wiki[2][0]:
-            overview_parts.insert(0, wiki[2][0])
+        for hit in wiki.get("query", {}).get("search", []):
+            clean_snip = BeautifulSoup(hit.get("snippet", ""), "lxml").get_text(" ", strip=True)
+            if clean_snip:
+                overview_parts.append(clean_snip)
+                results.append({
+                    "title": hit.get("title", ""),
+                    "url": f"https://en.wikipedia.org/wiki/{hit.get('title', '').replace(' ', '_')}",
+                    "source": "Wikipedia",
+                    "snippet": clean_snip,
+                })
     except Exception:
         pass
 
@@ -117,7 +125,7 @@ def fetch_lightweight_ai_overview(query: str):
         "query": query,
         "ai_overview": ai_summary,
         "organic_results": results,
-        "engine": "lightweight-cloud-overview",
+        "engine": "google-scraper-lightweight",
     }
 
 
